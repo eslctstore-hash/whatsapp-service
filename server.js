@@ -4,7 +4,7 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-// ✅ نستخدم المتغيرات من Environment Variables (الأفضل من Settings → Environment في Render)
+// ✅ نستخدم المتغيرات من Environment Variables
 const INSTANCE_ID = process.env.ULTRA_INSTANCE;
 const TOKEN = process.env.ULTRA_TOKEN;
 const API_URL = `https://api.ultramsg.com/${INSTANCE_ID}/messages/chat`;
@@ -26,15 +26,29 @@ async function sendWhatsAppMessage(phone, message) {
   }
 }
 
+// 🔹 ذاكرة مؤقتة لمنع تكرار نفس الحالة
+const lastStatusMap = new Map();
+function shouldSend(orderId, status, fulfillment) {
+  const last = lastStatusMap.get(orderId);
+  const current = `${status}-${fulfillment}`;
+  
+  if (last === current) {
+    return false; // نفس الحالة أُرسلت من قبل
+  }
+  lastStatusMap.set(orderId, current);
+  return true;
+}
+
 // ✅ Route اختبار
 app.get("/", (req, res) => {
   res.send("🚀 WhatsApp Service up and running");
 });
 
-// ✅ Webhook لتلقي الطلبات من Shopify
+// ✅ Webhook من Shopify
 app.post("/whatsapp-webhook", async (req, res) => {
   const order = req.body;
   const phone = order?.shipping_address?.phone || order?.billing_address?.phone;
+  const topic = req.headers["x-shopify-topic"]; // نوع الحدث من Shopify
 
   if (!phone) {
     console.log("⚠️ لا يوجد رقم هاتف في الطلب");
@@ -42,6 +56,7 @@ app.post("/whatsapp-webhook", async (req, res) => {
   }
 
   // تحديد الحالة
+  const orderId = order.id || order.name;
   const status = order.financial_status || "pending";  
   const fulfillment = order.fulfillment_status || "unfulfilled";  
   const isDigital = order.line_items.some(line =>
@@ -92,13 +107,15 @@ app.post("/whatsapp-webhook", async (req, res) => {
 ولا تنسَ تقييم تجربتك معنا 🙏`;
   }
 
-  // ✉️ إرسال الرسالة الرئيسية
-  if (message) {
+  // ✉️ إرسال الرسالة الرئيسية (مع منع التكرار)
+  if (message && shouldSend(orderId, status, fulfillment)) {
     await sendWhatsAppMessage(phone, message);
+  } else {
+    console.log("⚠️ رسالة مكررة تم تجاهلها:", orderId, status, fulfillment);
   }
 
-  // 🔑 لو الطلب رقمي (LikeCard) وعنده ملاحظة (سيريالات)
-  if (isDigital && order.note) {
+  // 🔑 منتجات رقمية (LikeCard) → ترسل فقط عند تحديث الطلب + وجود ملاحظة
+  if (topic === "orders/updated" && isDigital && order.note) {
     const digitalMsg = `🔑 تفاصيل طلبك الرقمي:  
 
 ${order.note}  
