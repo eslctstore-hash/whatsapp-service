@@ -4,44 +4,52 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
+// ✅ بيانات UlraMsg من Environment Variables
 const INSTANCE_ID = process.env.ULTRA_INSTANCE;
 const TOKEN = process.env.ULTRA_TOKEN;
 const API_URL = `https://api.ultramsg.com/${INSTANCE_ID}/messages/chat`;
 
-// إرسال رسالة واتساب
+// ✅ دالة إرسال واتساب
 async function sendWhatsAppMessage(phone, message) {
   try {
-    await axios.post(API_URL, {
+    const response = await axios.post(API_URL, {
       to: phone,
       body: message
     }, {
       headers: { "Content-Type": "application/json" },
       params: { token: TOKEN }
     });
-    console.log("✅ أُرسلت:", message);
+    console.log("✅ رسالة واتساب أُرسلت:", response.data);
   } catch (err) {
-    console.error("❌ خطأ:", err.response?.data || err.message);
+    console.error("❌ خطأ إرسال:", err.response?.data || err.message);
   }
 }
 
-// منع التكرار عبر محتوى الرسالة
+// ✅ منع التكرار عبر Cache
 const sentCache = new Set();
 function shouldSend(key) {
-  if (sentCache.has(key)) return false;
+  if (sentCache.has(key)) {
+    return false;
+  }
   sentCache.add(key);
   return true;
 }
 
-// Route اختبار
-app.get("/", (req, res) => res.send("🚀 WhatsApp Service running"));
+// ✅ Route اختبار
+app.get("/", (req, res) => {
+  res.send("🚀 WhatsApp Service running");
+});
 
-// Webhook
+// ✅ Webhook
 app.post("/whatsapp-webhook", async (req, res) => {
   const topic = req.headers["x-shopify-topic"];
   const order = req.body;
   const phone = order?.shipping_address?.phone || order?.billing_address?.phone;
 
-  if (!phone) return res.status(200).send("No phone");
+  if (!phone) {
+    console.log("⚠️ لا يوجد رقم هاتف في الطلب");
+    return res.status(200).send("No phone");
+  }
 
   const orderId = order.id || order.order_id || order.name;
   const status = order.financial_status || "pending";
@@ -120,22 +128,35 @@ app.post("/whatsapp-webhook", async (req, res) => {
   }
 
   // ----------------------------
-  // 5. الملاحظات (للسيريالات)
+  // 5. الملاحظات (للسيريالات / LikeCard)
   // ----------------------------
-  if (topic === "orders/updated" && isDigital && order.note) {
-    const key = `note-${orderId}-${order.note}`;
-    if (shouldSend(key)) {
-      message = `🔑 تم إنشاء رمز الاسترداد لطلبك  
+  if (topic === "orders/updated") {
+    const noteContent = order.note || (order.note_attributes && JSON.stringify(order.note_attributes)) || null;
 
-${order.note}`;
+    if (noteContent) {
+      if (isDigital || /كود|رمز|code/i.test(noteContent)) {
+        const key = `note-${orderId}-${noteContent}`;
+        if (shouldSend(key)) {
+          message = `🔑 تم إنشاء رمز الاسترداد لطلبك  
+
+${noteContent}`;
+        }
+      }
     }
   }
 
-  if (message) await sendWhatsAppMessage(phone, message);
+  // ----------------------------
+  // إرسال الرسالة إن وجدت
+  // ----------------------------
+  if (message) {
+    await sendWhatsAppMessage(phone, message);
+  } else {
+    console.log(`ℹ️ لم يتم إرسال رسالة لهذه الحالة: ${topic} - Order ${orderId}`);
+  }
 
   res.status(200).send("OK");
 });
 
-// تشغيل
+// ✅ تشغيل السيرفر
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 WhatsApp Service on port ${PORT}`));
